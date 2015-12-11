@@ -20,6 +20,8 @@ is
 
 abstract-value.sig
 abstract-value.fun
+analysis.sig
+analysis.fun
 globalize.sig
 globalize.fun
 lambda-free.sig
