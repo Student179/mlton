@@ -31,6 +31,18 @@ signature CONTROL_FLAGS =
 
       val chunk: chunk ref
 
+      structure CFA:
+         sig
+            datatype t =
+               ZeroCFA
+             | SimplyTypedCFA
+            val toString: t -> string
+         end
+
+      datatype cfa = datatype CFA.t
+
+      val cfa: CFA.t ref
+
       val closureConvertGlobalize: bool ref
       val closureConvertShrink: bool ref
 

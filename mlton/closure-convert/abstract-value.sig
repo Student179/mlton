@@ -69,4 +69,10 @@ signature ABSTRACT_VALUE =
       val ty: t -> Sxml.Type.t
       val typeIsFirstOrder: Sxml.Type.t -> bool
       val unify: t * t -> unit
+
+      (* In the functions below, the argument must not be Type _. *)
+      val arrayM: t -> t
+      val refM: t -> t
+      val vectorM: t -> t
+      val weakM: t -> t
    end

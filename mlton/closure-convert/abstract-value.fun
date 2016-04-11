@@ -277,6 +277,18 @@ val fromType = Trace.trace ("AbstractValue.fromType", Type.layout, layout) fromT
 fun tuple (vs: t vector): t = new (Tuple vs,
                                    Type.tuple (Vector.map (vs, ty)))
 
+fun arrayM (v: t): t = new (Unify (UnaryTycon.Array, v),
+                           Type.array (ty v))
+
+fun refM (v: t): t = new (Unify (UnaryTycon.Ref, v),
+                           Type.reff (ty v))
+
+fun vectorM (v: t): t = new (Unify (UnaryTycon.Vector, v),
+                           Type.vector (ty v))
+
+fun weakM (v: t): t = new (Unify (UnaryTycon.Weak, v),
+                           Type.weak (ty v))
+
 fun select (v, i) =
    case tree v of
       Type t => fromType (Vector.sub (Type.deTuple t, i))

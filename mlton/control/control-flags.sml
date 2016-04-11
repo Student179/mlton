@@ -52,6 +52,23 @@ val chunk = control {name = "chunk",
                      default = Coalesce {limit = 4096},
                      toString = Chunk.toString}
 
+structure CFA =
+   struct
+      datatype t =
+         ZeroCFA
+       | SimplyTypedCFA
+
+      val toString: t -> string =
+         fn ZeroCFA => "0CFA"
+          | SimplyTypedCFA => "Simple Type Analysis"
+   end
+
+datatype cfa = datatype CFA.t
+
+val cfa = control {name = "Control Flow Analysis",
+                       default = CFA.ZeroCFA,
+                       toString = CFA.toString}
+
 val closureConvertGlobalize = control {name = "closureConvertGlobalize",
                                        default = true,
                                        toString = Bool.toString}
