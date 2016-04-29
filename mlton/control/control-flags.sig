@@ -36,12 +36,13 @@ signature CONTROL_FLAGS =
             datatype t =
                ZeroCFA
              | SimplyTypedCFA
+             | OneMCFA
             val toString: t -> string
          end
 
-      datatype cfa = datatype CFA.t
+      datatype closureConvertCFA = datatype CFA.t
 
-      val cfa: CFA.t ref
+      val closureConvertCFA: CFA.t ref
 
       val closureConvertGlobalize: bool ref
       val closureConvertShrink: bool ref

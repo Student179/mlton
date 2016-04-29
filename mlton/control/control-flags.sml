@@ -57,15 +57,17 @@ structure CFA =
       datatype t =
          ZeroCFA
        | SimplyTypedCFA
+       | OneMCFA
 
       val toString: t -> string =
          fn ZeroCFA => "0CFA"
           | SimplyTypedCFA => "Simple Type Analysis"
+          | OneMCFA => "{One-M} CFA"
    end
 
-datatype cfa = datatype CFA.t
+datatype closureConvertCFA = datatype CFA.t
 
-val cfa = control {name = "Control Flow Analysis",
+val closureConvertCFA = control {name = "Control Flow Analysis",
                        default = CFA.ZeroCFA,
                        toString = CFA.toString}
 

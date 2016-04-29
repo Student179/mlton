@@ -284,6 +284,15 @@ fun makeOptions {usage} =
                                                  end
                                             else usage ()
                                       end))),
+       (Expert, "closure-convert-cfa", " {zeroCFA|SimplyTyped}",
+        "choose Control Flow Analysis to use during closure conversion",
+        SpaceString (fn s =>
+                        closureConvertCFA :=
+                        (case s of
+                            "zeroCFA" => Control.CFA.ZeroCFA
+                          | "simplyTyped" => Control.CFA.SimplyTypedCFA
+                          | "OneMCFA" => Control.CFA.OneMCFA
+                          | _ => usage (concat ["invalid -closure-convert-cfa flag: ", s])))),
        (Expert, "closure-convert-globalize", " {true|false}",
         "whether to globalize during closure conversion",
         Bool (fn b => (closureConvertGlobalize := b))),

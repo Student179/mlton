@@ -50,8 +50,10 @@ end
 
 structure Value = AbstractValue (structure Ssa = Ssa
                                  structure Sxml = Sxml)
-local open Value
-in structure Lambdas = Lambdas
+local 
+    open Value
+in 
+    structure Lambdas = Lambdas
 end
 
 (* Accum.t is one of the results returned internally by the converter -- an
@@ -163,6 +165,24 @@ in
    structure Status = Status
 end
 
+structure Context =
+    struct
+        datatype t = Context of {context: Sxml.Var.t list,
+                                 hash: Word.t}
+
+        val newHash = Random.word
+
+        fun new context = Context{context = context,
+                                  hash = newHash () }
+
+        fun hash (Context {hash, ...}) = hash
+
+        fun dest (Context {context, ...}) = context
+      
+        fun equals (Context r, Context r') =
+           #hash r = #hash r'
+    end
+
 structure LambdaInfo =
    struct
       datatype t =
@@ -175,7 +195,9 @@ structure LambdaInfo =
                name: Func.t,
                recs: Var.t vector ref,
                (* The type of its environment record. *)
-               ty: Type.t option ref
+               ty: Type.t option ref,
+               (* A list of Contexts that have been visted. *)
+               visited: Context.t list
                }
 
       fun frees (T {frees, ...}) = !frees
@@ -191,12 +213,60 @@ structure VarInfo =
                 value: Value.t}
 
       local
-         fun make sel (r: t) = sel r
+         fun make sel (r: t) = sel r 
       in
          val lambda = valOf o make #lambda
          val value = make #value
       end
    end
+
+structure ContextInfo =
+    struct
+        datatype t = ContextInfo of {context: Context.t,
+                                 var: Var.t,
+                                 hash: Word.t}
+
+        fun newHash (context, var) = (Context.hash context) + (Var.hash var)
+
+        fun new (context, var) = ContextInfo{ context = context,
+                                              var = var,
+                                              hash = newHash (context, var)}
+
+        fun hash (ContextInfo {hash, ...}) = hash
+
+        fun dest (ContextInfo {context, var, ...}) = (context, var)
+
+        fun equals (ContextInfo r, ContextInfo r') =
+           #hash r = #hash r'
+    end
+
+structure ContextValueMap =
+  struct
+    type t = (ContextInfo.t * Value.t option ref) HashSet.t
+ 
+    fun set (set: t, key: ContextInfo.t, value: Value.t): unit =
+      let
+        val _ = HashSet.insertIfNew (set, ContextInfo.hash key,
+                                     (fn (k, _) => ContextInfo.equals(k, key)),
+                                     (fn () => (key, ref (SOME value))),
+                                     (fn (_, v) => v := (SOME value)))
+      in
+        ()
+      end
+ 
+    fun new (): t =
+      HashSet.new {hash = fn (k, _) => ContextInfo.hash k}
+ 
+    fun lookup (set: t, key: ContextInfo.t): Value.t option =
+      let
+        val (_, value) = HashSet.lookupOrInsert (set, ContextInfo.hash key,
+                                     (fn (k, _) => ContextInfo.equals(k, key)),
+                                     (fn () => (key, ref NONE)))
+      in
+        !value
+      end
+  end
+
 
 val traceLoopBind =
    Trace.trace
@@ -241,7 +311,10 @@ fun closureConvert
        * Initialize lambdaInfo and varInfo.
        *)
       val _ = 
-        (case !Control.cfa of
+        (case !Control.closureConvertCFA of
+          (* ---------------------------------- *)
+          (*            Zero CFA                *)
+          (* ---------------------------------- *)
           Control.CFA.ZeroCFA => 
           let
             val _ =
@@ -256,6 +329,7 @@ fun closureConvert
                let
                   open Sxml
                   val bogusFrees = ref []
+
                   fun newVar' (x, v, lambda) =
                      setVarInfo (x, {frees = ref bogusFrees,
                                      isGlobal = ref false,
@@ -379,7 +453,8 @@ fun closureConvert
                                           frees = ref (Vector.new0 ()),
                                           name = Func.newString (Var.originalName x),
                                           recs = ref (Vector.new0 ()),
-                                          ty = ref NONE})
+                                          ty = ref NONE,
+                                          visited = []})
                         val _ = newVar (arg, Value.fromType argType)
                      in
                         Value.lambda (lambda,
@@ -392,6 +467,9 @@ fun closureConvert
                end
            in ()
            end
+          (* ---------------------------------- *)
+          (*        Simply Typed CFA            *)
+          (* ---------------------------------- *)
         | Control.CFA.SimplyTypedCFA =>
           let
             (* New fromType function for the simple type analysis *)
@@ -464,7 +542,7 @@ fun closureConvert
                                                         SOME lambda))
                                ; (Vector.foreach
                                   (decs, fn {var, lambda, ty, ...} =>
-                                   loopLambda (lambda, var, ty))))
+                                    loopLambda (lambda, var, ty))))
                          | MonoVal b => loopBind b
                          | _ => Error.bug "ClosureConvert.loopDec: strange dec"
                      end
@@ -515,7 +593,8 @@ fun closureConvert
                                           frees = ref (Vector.new0 ()),
                                           name = Func.newString (Var.originalName x),
                                           recs = ref (Vector.new0 ()),
-                                          ty = ref NONE})
+                                          ty = ref NONE,
+                                          visited = []})
                         val {arg, argType, body, ...} = Lambda.dest lambda
                         val _ = newVar (arg, valueFromType argType)
                         val _ = loopExp body
@@ -529,7 +608,175 @@ fun closureConvert
                end
             in ()
             end
-        | _ => ())
+          (* ---------------------------------- *)
+          (*            One M CFA               *)
+          (* ---------------------------------- *)
+        | Control.CFA.OneMCFA => 
+          let
+            open Sxml
+            val _ =
+               Vector.foreach
+               (datatypes, fn {cons, ...} =>
+                Vector.foreach
+                (cons, fn {con, arg} =>
+                 setConArg (con, (case arg of
+                                     NONE => NONE
+                                   | SOME t => SOME (Value.fromType t)))))
+            val bogusFrees = ref []
+            fun setVarInfoForBody (x: Var.t, tyVar: Tyvar.t vector, ty: Type.t): unit =
+                    setVarInfo (x, { frees = ref bogusFrees,
+                                     isGlobal = ref false,
+                                     lambda = NONE,
+                                     replacement = ref x,
+                                     status = ref Status.init,
+                                     value = Value.fromType ty})
+            val _ = Exp.foreachBoundVar (body, setVarInfoForBody)
+            val _ =
+               let
+                  val contextValueMap = ContextValueMap.new ()
+                  fun varExps xs = Vector.map (xs, varExp)
+                  fun setVarLambda (x: Var.t, l: Lambda.t) = 
+                      let 
+                        val _ = setLambdaInfo
+                               (l,
+                                LambdaInfo.T {con = ref Con.bogus,
+                                              frees = ref (Vector.new0 ()),
+                                              name = Func.newString (Var.originalName x),
+                                              recs = ref (Vector.new0 ()),
+                                              ty = ref NONE,
+                                              visited = []})
+                        val {lambda, ...} = varInfo x
+                        val _ = {lambda = SOME l}
+                      in ()
+                      end
+                  (* ---------------------------------- *)
+                  (*    Main CFA Program Walkthrough    *)
+                  (* ---------------------------------- *)
+                  fun loopExp (c: Context.t, e: Exp.t): Value.t =
+                     let
+                        val {decs, result} = Exp.dest e
+                        val () = List.foreach (decs, (loopDec c))
+                     in
+                        varExp result
+                     end
+                  and loopDec (c: Context.t) (d: Dec.t): unit =
+                     let
+                        datatype z = datatype Dec.t
+                     in
+                        case d of
+                           Fun {decs, ...} =>
+                              (Vector.foreach (decs, fn {var, lambda, ty, ...} =>
+                                  setVarLambda (var, lambda)))
+                         | MonoVal b => loopBind (c, b)
+                         | _ => Error.bug "ClosureConvert.loopDec: strange dec"
+                     end
+                  and loopBind (c: Context.t, arg): unit =
+                     traceLoopBind
+                     (fn {var, ty, exp} =>
+                     let
+                        fun set v = 
+                          let
+                            val contextInfo = ContextInfo.new(c, var)
+                          in 
+                            ContextValueMap.set(contextValueMap,
+                                                contextInfo, v)
+                          end
+                        fun newV (x, v) = 
+                          let
+                            val contextInfo = ContextInfo.new(c, x)
+                          in 
+                            ContextValueMap.set(contextValueMap,
+                                                contextInfo, v)
+                          end
+                        fun new () =
+                         let val v = Value.fromType ty
+                         in set v; v
+                         end
+                        val new' = ignore o new
+                        datatype z = datatype PrimExp.t
+                     in
+                        case exp of
+                           App {func, arg} =>
+                              let val arg = varExp arg
+                                 val result = new ()
+                              in Value.addHandler
+                                 (varExp func, fn l =>
+                                  let
+                                     val lambda = Value.Lambda.dest l
+                                     val {arg = formal, body, ...} =
+                                               Lambda.dest lambda
+                                  in Value.coerce {from = arg,
+                                                   to = value formal}
+                                     ; Value.coerce {from = expValue body,
+                                                     to = result}
+                                  end)
+                              end
+                         | Case {cases, default, ...} =>
+                              let
+                                 val result = new ()
+                                 fun branch e =
+                                    Value.coerce {from = loopExp (c, e), to = result}
+                                 fun handlePat (Pat.T {con, arg, ...}) =
+                                    case (arg,      conArg con) of
+                                       (NONE,        NONE)       => ()
+                                     | (SOME (x, _), SOME v)     => newV (x, v)
+                                     | _ => Error.bug "ClosureConvert.loopBind: Case"
+                                 val _ = Cases.foreach' (cases, branch, handlePat)
+                                 val _ = Option.app (default, branch o #1)
+                              in ()
+                              end
+                         | ConApp {con, arg, ...} =>
+                              (case (arg,    conArg con) of
+                                  (NONE,   NONE)       => ()
+                                | (SOME x, SOME v)     =>
+                                     Value.coerce {from = varExp x, to = v}
+                                | _ => Error.bug "ClosureConvert.loopBind: ConApp"
+                               ; new' ())
+                         | Const _ => new' ()
+                         | Handle {try, catch = (x, t), handler} =>
+                              let
+                                 val result = new ()
+                              in Value.coerce {from = loopExp (c, try), to = result}
+                                 ; newV (x, Value.fromType t)
+                                 ; Value.coerce {from = loopExp (c, handler), to = result}
+                              end
+                         | Lambda l =>  
+                              let
+                                val _ = setVarLambda (var, l)
+                                val _ = set (Value.lambda (l, ty))
+                              in ()
+                              end
+                         | PrimApp {prim, args, ...} =>
+                              set (Value.primApply {prim = prim,
+                                                    args = varExps args,
+                                                    resultTy = ty})
+                         | Profile _ => new' ()
+                         | Raise _ => new' ()
+                         | Select {tuple, offset} =>
+                              set (Value.select (varExp tuple, offset))
+                         | Tuple xs =>
+                              if Value.typeIsFirstOrder ty
+                                 then new' ()
+                            else set (Value.tuple (Vector.map (xs, varExp)))
+                         | Var x => set (varExp x)
+                     end) arg
+                  and loopLambda (c: Context.t, lambda: Lambda.t, x: Var.t): Value.t =
+                     let
+                        val _ = List.push (allLambdas, lambda)
+                        val {arg, argType, body, ...} = Lambda.dest lambda
+                     in
+                        Value.lambda (lambda,
+                                      Type.arrow (argType, 
+                                                Value.ty (loopExp (c, body))))
+                     end
+                  val _ =
+                     Control.trace (Control.Pass, "flow analysis")
+                     loopExp ((Context.new []), body)
+               in ()
+               end
+           in ()
+           end
+        | _ => Error.bug "Control.closureConvertCFA: Invalid Analysis Selected")
       val _ =
          Control.diagnostics
          (fn display =>
@@ -1080,6 +1327,7 @@ fun closureConvert
                                       args = Vector.new1 (lambdaInfoTuple info)},
                          ac)
                   end
+
              | SprimExp.PrimApp {prim, targs, args} =>
                   let
                      val prim = Prim.map (prim, convertType)
@@ -1224,6 +1472,7 @@ fun closureConvert
                   simple (Dexp.tuple {exps = Vector.map (xs, convertVarExp),
                                       ty = ty})
              | SprimExp.Var y => simple (convertVarExp y)
+
          end) arg
       and convertLambda (lambda: Slambda.t,
                          info as LambdaInfo.T {frees, name, recs, ...},
