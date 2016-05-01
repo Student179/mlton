@@ -17,11 +17,22 @@ signature ABSTRACT_VALUE =
    sig
       include ABSTRACT_VALUE_STRUCTS
 
+      structure Context:
+         sig
+            type t
+
+            val new: Sxml.Var.t list -> t
+            val hash: t -> Word.t
+            val dest: t -> Sxml.Var.t list
+            val equals: t * t -> bool
+         end
+
       structure Lambda:
          sig
             type t
 
-            val dest: t -> Sxml.Lambda.t
+            val lambda: t -> Sxml.Lambda.t
+            val dest: t -> Sxml.Lambda.t * Context.t
             val layout: t -> Layout.t
          end
 
@@ -57,7 +68,7 @@ signature ABSTRACT_VALUE =
       val equals: t * t -> bool
       val fromType: Sxml.Type.t -> t
       val isEmpty: t -> bool (* no possible values correspond to me *) 
-      val lambda: Sxml.Lambda.t * Sxml.Type.t (* The type of the lambda. *) -> t
+      val lambda: Sxml.Lambda.t * Context.t * Sxml.Type.t (* The type of the lambda. *) -> t
       val layout: t -> Layout.t
       val primApply: {prim: Sxml.Type.t Sxml.Prim.t,
                       args: t vector,

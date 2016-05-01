@@ -14,22 +14,46 @@ open Sxml
 
 structure Dset = DisjointSet
 
+structure Context =
+    struct
+        datatype t = Context of {context: Sxml.Var.t list,
+                                 hash: Word.t}
+
+        val newHash = Random.word
+
+        fun new context = Context{context = context,
+                                  hash = newHash () }
+
+        fun hash (Context {hash, ...}) = hash
+
+        fun dest (Context {context, ...}) = context
+      
+        fun equals (Context r, Context r') =
+           #hash r = #hash r'
+    end
+
+
 structure Lambda =
    struct
-      datatype t = Lambda of {lambda: Sxml.Lambda.t,
+      datatype t = Lambda of {context: Context.t,
+                              lambda: Sxml.Lambda.t,
                               hash: Word.t}
 
       val newHash = Random.word
 
-      fun new lambda = Lambda {lambda = lambda,
-                               hash = newHash ()}
+      fun new (lambda, context) = Lambda { context = context,
+                                           lambda = lambda,
+                                           hash = newHash ()}
+
+      fun lambda (Lambda {lambda, ...}) = lambda
 
       fun hash (Lambda {hash, ...}) = hash
 
-      fun dest (Lambda {lambda, ...}) = lambda
+      fun dest (Lambda {lambda, context, ...}) = (lambda, context)
 
       fun equals (Lambda r, Lambda r') =
          #hash r = #hash r'
+         andalso Context.equals (#context r, #context r') 
          andalso Sxml.Lambda.equals (#lambda r, #lambda r')
 
       fun layout (Lambda {lambda, ...}) =
@@ -48,7 +72,7 @@ structure LambdaNode:
 
       val addHandler: t * (Lambda.t -> unit) -> unit
       val coerce: {from: t, to: t} -> unit
-      val lambda: Sxml.Lambda.t -> t
+      val lambda: Sxml.Lambda.t * Context.t -> t
       val layout: t -> Layout.t
       val new: unit -> t
       val toSet: t -> Lambdas.t
@@ -69,7 +93,7 @@ structure LambdaNode:
 
       fun new () = newSet Lambdas.empty
 
-      fun lambda l = newSet (Lambdas.singleton (Lambda.new l))
+      fun lambda (l, c) = newSet (Lambdas.singleton (Lambda.new (l, c)))
 
       fun handles (h: Lambda.t -> unit, s: Lambdas.t): unit =
          Lambdas.foreach (s, fn l => h l)
@@ -315,8 +339,8 @@ fun deArray v =
     | Unify (_, v) => v
     | _ => Error.bug "AbstractValue.deArray"
 
-fun lambda (l: Sxml.Lambda.t, t: Type.t): t =
-   new (Lambdas (LambdaNode.lambda l), t)       
+fun lambda (l: Sxml.Lambda.t, c: Context.t, t: Type.t): t =
+   new (Lambdas (LambdaNode.lambda (l, c)), t)       
 
 fun unify (v, v') =
    if Dset.equals (v, v')

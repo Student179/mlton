@@ -53,6 +53,7 @@ structure Value = AbstractValue (structure Ssa = Ssa
 local 
     open Value
 in 
+    structure Context = Context
     structure Lambdas = Lambdas
 end
 
@@ -165,24 +166,6 @@ in
    structure Status = Status
 end
 
-structure Context =
-    struct
-        datatype t = Context of {context: Sxml.Var.t list,
-                                 hash: Word.t}
-
-        val newHash = Random.word
-
-        fun new context = Context{context = context,
-                                  hash = newHash () }
-
-        fun hash (Context {hash, ...}) = hash
-
-        fun dest (Context {context, ...}) = context
-      
-        fun equals (Context r, Context r') =
-           #hash r = #hash r'
-    end
-
 structure LambdaInfo =
    struct
       datatype t =
@@ -257,7 +240,7 @@ structure ContextValueMap =
     fun new (): t =
       HashSet.new {hash = fn (k, _) => ContextInfo.hash k}
  
-    fun lookup (set: t, key: ContextInfo.t): Value.t option =
+    fun lookUp (set: t, key: ContextInfo.t): Value.t option =
       let
         val (_, value) = HashSet.lookupOrInsert (set, ContextInfo.hash key,
                                      (fn (k, _) => ContextInfo.equals(k, key)),
@@ -266,7 +249,6 @@ structure ContextValueMap =
         !value
       end
   end
-
 
 val traceLoopBind =
    Trace.trace
@@ -389,7 +371,7 @@ fun closureConvert
                               in Value.addHandler
                                  (varExp func, fn l =>
                                   let
-                                     val lambda = Value.Lambda.dest l
+                                     val (lambda, _) = Value.Lambda.dest l
                                      val {arg = formal, body, ...} =
                                         Lambda.dest lambda
                                   in Value.coerce {from = arg,
@@ -457,7 +439,7 @@ fun closureConvert
                                           visited = []})
                         val _ = newVar (arg, Value.fromType argType)
                      in
-                        Value.lambda (lambda,
+                        Value.lambda (lambda, Context.new [],
                                       Type.arrow (argType, Value.ty (loopExp body)))
                      end
                   val _ =
@@ -585,7 +567,8 @@ fun closureConvert
                   and loopLambda (lambda: Lambda.t, x: Var.t, ty: Type.t): unit =
                      let
                         val _ = List.push (allLambdas, lambda)
-                        val () = Value.unify(valueFromType ty, Value.lambda (lambda, ty))
+                        val () = Value.unify(valueFromType ty, 
+                                            Value.lambda (lambda, Context.new [], ty))
                         val _ =
                            setLambdaInfo
                            (lambda,
@@ -634,7 +617,18 @@ fun closureConvert
             val _ =
                let
                   val contextValueMap = ContextValueMap.new ()
-                  fun varExps xs = Vector.map (xs, varExp)
+                  fun lookUpVar (c:Context.t, x: Var.t) : Value.t =
+                      let
+                        val info = ContextInfo.new(c, x)
+                        val valueOpt = ContextValueMap.lookUp(contextValueMap, info)
+                      in
+                        case valueOpt of
+                          SOME v => v
+                        | NONE => Error.bug "HashMap LookUp: Value does not exist."  
+                      end
+                  fun lookUp (c: Context.t) (x: SvarExp.t) : Value.t =
+                      lookUpVar(c, SvarExp.var x)
+                  fun lookUpXs c xs = Vector.map (xs, (lookUp c))
                   fun setVarLambda (x: Var.t, l: Lambda.t) = 
                       let 
                         val _ = setLambdaInfo
@@ -657,7 +651,7 @@ fun closureConvert
                         val {decs, result} = Exp.dest e
                         val () = List.foreach (decs, (loopDec c))
                      in
-                        varExp result
+                        lookUp c result
                      end
                   and loopDec (c: Context.t) (d: Dec.t): unit =
                      let
@@ -697,20 +691,43 @@ fun closureConvert
                      in
                         case exp of
                            App {func, arg} =>
-                              let val arg = varExp arg
-                                 val result = new ()
-                              in Value.addHandler
-                                 (varExp func, fn l =>
-                                  let
-                                     val lambda = Value.Lambda.dest l
-                                     val {arg = formal, body, ...} =
-                                               Lambda.dest lambda
-                                  in Value.coerce {from = arg,
-                                                   to = value formal}
+                            let 
+                              val argV = lookUp c arg
+                              val result = new ()
+                              val c' = Context.new [SvarExp.var func]
+                            in Value.addHandler
+                              (lookUp c func, fn l =>
+                              let
+                                 val (lambda, cx) = Value.Lambda.dest l
+                                 val {arg = formal, body, ...} = 
+                                              Lambda.dest lambda
+                                 val LambdaInfo.T {visited, ...} = lambdaInfo lambda
+                              in
+                                if List.contains(visited, cx, Context.equals)
+                                  then 
+                                    let
+                                    in 
+                                      Value.coerce {from = argV,
+                                                   to = lookUpVar(cx, formal)}
                                      ; Value.coerce {from = expValue body,
                                                      to = result}
-                                  end)
-                              end
+                                    end
+                                else
+                                  let
+                                    val visited = List.append (visited, [cx])
+                                    val _ = List.push (allLambdas, lambda)
+                                    val _ = Value.coerce {from = loopExp (c', body),
+                                                           to = result}
+                                    val _ = Value.coerce {from = argV,
+                                                         to = lookUpVar(c', formal)}
+                                  in
+                                    Value.coerce {from = argV,
+                                                  to = lookUpVar(cx, formal)}
+                                   ; Value.coerce {from = loopExp (cx, body),
+                                                   to = result}
+                                  end
+                              end)
+                            end
                          | Case {cases, default, ...} =>
                               let
                                  val result = new ()
@@ -729,7 +746,7 @@ fun closureConvert
                               (case (arg,    conArg con) of
                                   (NONE,   NONE)       => ()
                                 | (SOME x, SOME v)     =>
-                                     Value.coerce {from = varExp x, to = v}
+                                     Value.coerce {from = lookUp c x, to = v}
                                 | _ => Error.bug "ClosureConvert.loopBind: ConApp"
                                ; new' ())
                          | Const _ => new' ()
@@ -743,32 +760,23 @@ fun closureConvert
                          | Lambda l =>  
                               let
                                 val _ = setVarLambda (var, l)
-                                val _ = set (Value.lambda (l, ty))
+                                val _ = set (Value.lambda (l, c, ty))
                               in ()
                               end
                          | PrimApp {prim, args, ...} =>
                               set (Value.primApply {prim = prim,
-                                                    args = varExps args,
+                                                    args = lookUpXs c args,
                                                     resultTy = ty})
                          | Profile _ => new' ()
                          | Raise _ => new' ()
                          | Select {tuple, offset} =>
-                              set (Value.select (varExp tuple, offset))
+                              set (Value.select (lookUp c tuple, offset))
                          | Tuple xs =>
-                              if Value.typeIsFirstOrder ty
-                                 then new' ()
-                            else set (Value.tuple (Vector.map (xs, varExp)))
-                         | Var x => set (varExp x)
+                            if Value.typeIsFirstOrder ty
+                               then new' ()
+                            else set (Value.tuple (Vector.map (xs, lookUp c)))
+                         | Var x => set (lookUp c x)
                      end) arg
-                  and loopLambda (c: Context.t, lambda: Lambda.t, x: Var.t): Value.t =
-                     let
-                        val _ = List.push (allLambdas, lambda)
-                        val {arg, argType, body, ...} = Lambda.dest lambda
-                     in
-                        Value.lambda (lambda,
-                                      Type.arrow (argType, 
-                                                Value.ty (loopExp (c, body))))
-                     end
                   val _ =
                      Control.trace (Control.Pass, "flow analysis")
                      loopExp ((Context.new []), body)
@@ -900,7 +908,7 @@ fun closureConvert
                      val cons =
                         Vector.fromListMap
                         (Lambdas.toList ls, fn l =>
-                         {lambda = Value.Lambda.dest l,
+                         {lambda = Value.Lambda.lambda l,
                           con = Con.newString "Env"})
                      val ty = Type.datatypee tycon
                      val info = {ty = ty, cons = cons}
