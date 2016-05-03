@@ -694,38 +694,17 @@ fun closureConvert
                             let 
                               val argV = lookUp c arg
                               val result = new ()
-                              val c' = Context.new [SvarExp.var func]
                             in Value.addHandler
                               (lookUp c func, fn l =>
                               let
                                  val (lambda, cx) = Value.Lambda.dest l
-                                 val {arg = formal, body, ...} = 
-                                              Lambda.dest lambda
-                                 val LambdaInfo.T {visited, ...} = lambdaInfo lambda
+                                 val results  = loopLambda (cx, lambda, var)
+                                 val {arg = formal, body, ...} = Lambda.dest lambda
                               in
-                                if List.contains(visited, cx, Context.equals)
-                                  then 
-                                    let
-                                    in 
-                                      Value.coerce {from = argV,
-                                                   to = lookUpVar(cx, formal)}
-                                     ; Value.coerce {from = expValue body,
-                                                     to = result}
-                                    end
-                                else
-                                  let
-                                    val visited = List.append (visited, [cx])
-                                    val _ = List.push (allLambdas, lambda)
-                                    val _ = Value.coerce {from = loopExp (c', body),
-                                                           to = result}
-                                    val _ = Value.coerce {from = argV,
-                                                         to = lookUpVar(c', formal)}
-                                  in
-                                    Value.coerce {from = argV,
-                                                  to = lookUpVar(cx, formal)}
-                                   ; Value.coerce {from = loopExp (cx, body),
-                                                   to = result}
-                                  end
+                                  Value.coerce {from = argV,
+                                                to = lookUpVar(cx, formal)}
+                                 ; Value.coerce {from = results,
+                                                 to = result}
                               end)
                             end
                          | Case {cases, default, ...} =>
@@ -777,6 +756,33 @@ fun closureConvert
                             else set (Value.tuple (Vector.map (xs, lookUp c)))
                          | Var x => set (lookUp c x)
                      end) arg
+                  and loopLambda (c: Context.t, lambda: Lambda.t, x: Var.t): Value.t =
+                     let
+                        val _ = List.push (allLambdas, lambda)
+                        val c' = Context.new [x]
+                        val {arg, argType, body, ...} = Lambda.dest lambda
+                        val contextInfo = ContextInfo.new(c, arg)
+                        val _ = ContextValueMap.set(contextValueMap,
+                                            contextInfo, Value.fromType argType)
+                        val LambdaInfo.T {visited, ...} = lambdaInfo lambda
+                     in 
+                        if not(List.contains(visited, c', Context.equals))
+                          then 
+                            let
+                                val visitedC' = List.append (visited, [c'])
+                                val _ = {visted = visitedC'}
+                                val res = loopExp (c', body)
+                                val bVar = SvarExp.var (Sexp.result body)
+                                val contextInfo = 
+                                    ContextInfo.new(c', bVar)
+                                val _ = ContextValueMap.set(contextValueMap,
+                                                    contextInfo, res)
+                              in 
+                                res
+                            end
+                        else
+                          lookUp c' (Sexp.result body)
+                     end
                   val _ =
                      Control.trace (Control.Pass, "flow analysis")
                      loopExp ((Context.new []), body)
