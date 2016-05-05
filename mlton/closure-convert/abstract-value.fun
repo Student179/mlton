@@ -16,20 +16,26 @@ structure Dset = DisjointSet
 
 structure Context =
     struct
-        datatype t = Context of {context: Sxml.Var.t list,
-                                 hash: Word.t}
+        datatype t = Context of {context: Sxml.Var.t list}
 
-        val newHash = Random.word
+        fun new context = Context{context = context}
 
-        fun new context = Context{context = context,
-                                  hash = newHash () }
+        val hashX = (fn (c: Sxml.Var.t list) =>
+            let
+                val b = Word.fromInt(0)
+                fun hashB  (a: Var.t, b: Word.t) = Word.xorb(b, Var.hash(a))
+            in
+                List.fold(c, b, hashB)
+            end)
+        
 
-        fun hash (Context {hash, ...}) = hash
+        fun hash (Context {context}) = hashX context
 
-        fun dest (Context {context, ...}) = context
+
+        fun dest (Context {context}) = context
       
         fun equals (Context r, Context r') =
-           #hash r = #hash r'
+           hashX(#context r) = hashX(#context r')
     end
 
 
