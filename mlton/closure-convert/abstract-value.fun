@@ -35,7 +35,7 @@ structure Context =
         fun dest (Context {context}) = context
       
         fun equals (Context r, Context r') =
-           hashX(#context r) = hashX(#context r')
+           List.forall2(#context r, #context r', Var.equals)
     end
 
 

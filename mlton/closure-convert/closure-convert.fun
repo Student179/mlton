@@ -268,6 +268,21 @@ structure ContextValueMap =
         HashSet.foreach(set, printCIV)
       end
 
+    fun unifyVarInfo (set: t, varInfo: Var.t -> VarInfo.t):unit = 
+      let
+        fun unifyInfo (ci: ContextInfo.t, v: Value.t option ref) = 
+          let
+            val (c, var) = ContextInfo.dest ci
+            val {value, ...} = varInfo var
+            val v2 = case (!v) of
+                          SOME x => x
+                        | NONE => Error.bug "No NONE values should exist in the hashmap."
+          in
+             Value.unify (v2, value)
+          end
+      in
+        HashSet.foreach(set, unifyInfo)
+      end
   end
 
 val traceLoopBind =
@@ -644,12 +659,11 @@ fun closureConvert
                       Var.layout, Layout.ignore, Unit.layout)
                      newVar
                   fun varExps xs = Vector.map (xs, varExp)
-                  fun loopExp (e: Exp.t): Value.t =
+                  fun loopExp (e: Exp.t): unit =
                      let
                         val {decs, result} = Exp.dest e
-                        val () = List.foreach (decs, loopDec)
                      in
-                        varExp result
+                        List.foreach (decs, loopDec)
                      end
                   and loopDec (d: Dec.t): unit =
                      let
@@ -658,8 +672,12 @@ fun closureConvert
                         case d of
                            Fun {decs, ...} =>
                               (Vector.foreach (decs, fn {var, lambda, ty, ...} =>
-                                               newVar' (var, Value.fromType ty,
-                                                        SOME lambda)))
+                                             let
+                                               val _ = newVar' (var, Value.fromType ty,
+                                                        SOME lambda)
+                                               val _  = loopLambda (lambda, var, ty)
+                                             in ()
+                                              end))
 
                          | MonoVal b => loopBind b
                          | _ => Error.bug "ClosureConvert.loopDec: strange dec"
@@ -677,51 +695,30 @@ fun closureConvert
                         datatype z = datatype PrimExp.t
                      in
                         case exp of
-                           App {func, arg} =>
-                              let val arg = varExp arg
-                                 val result = new ()
-                              in Value.addHandler
-                                 (varExp func, fn l =>
-                                  let
-                                     val (lambda, _) = Value.Lambda.dest l
-                                     val {arg = formal, body, ...} =
-                                        Lambda.dest lambda
-                                  in Value.coerce {from = arg,
-                                                   to = value formal}
-                                     ; Value.coerce {from = expValue body,
-                                                     to = result}
-                                  end)
-                              end
+                           App {func, arg} => new' ()
                          | Case {cases, default, ...} =>
                               let
                                  val result = new ()
-                                 fun branch e =
-                                    Value.coerce {from = loopExp e, to = result}
                                  fun handlePat (Pat.T {con, arg, ...}) =
                                     case (arg,      conArg con) of
                                        (NONE,        NONE)       => ()
                                      | (SOME (x, _), SOME v)     => newVar (x, v)
                                      | _ => Error.bug "ClosureConvert.loopBind: Case"
-                                 val _ = Cases.foreach' (cases, branch, handlePat)
-                                 val _ = Option.app (default, branch o #1)
+                                 val _ = Cases.foreach' (cases, loopExp, handlePat)
+                                 val _ = Option.app (default, loopExp o #1)
                               in ()
                               end
-                         | ConApp {con, arg, ...} =>
-                              (case (arg,    conArg con) of
-                                  (NONE,   NONE)       => ()
-                                | (SOME x, SOME v)     =>
-                                     Value.coerce {from = varExp x, to = v}
-                                | _ => Error.bug "ClosureConvert.loopBind: ConApp"
-                               ; new' ())
+                         | ConApp {con, arg, ...} => new' ()
                          | Const _ => new' ()
                          | Handle {try, catch = (x, t), handler} =>
                               let
                                  val result = new ()
-                              in Value.coerce {from = loopExp try, to = result}
-                                 ; newVar (x, Value.fromType t)
-                                 ; Value.coerce {from = loopExp handler, to = result}
+                                 val _ = loopExp try
+                                 val _ = newVar (x, Value.fromType t)
+                              in
+                                 loopExp handler
                               end
-                         | Lambda l => set (loopLambda (l, var))
+                         | Lambda l => set (loopLambda (l, var, ty))
                          | PrimApp {prim, args, ...} =>
                               set (Value.primApply {prim = prim,
                                                     args = varExps args,
@@ -736,7 +733,7 @@ fun closureConvert
                             else set (Value.tuple (Vector.map (xs, varExp)))
                          | Var x => set (varExp x)
                      end) arg
-                  and loopLambda (lambda: Lambda.t, x: Var.t): Value.t =
+                  and loopLambda (lambda: Lambda.t, x: Var.t, ty: Type.t): Value.t =
                      let
                         val {arg, argType, body, ...} = Lambda.dest lambda
                         val _ =
@@ -749,15 +746,16 @@ fun closureConvert
                                           ty = ref NONE,
                                           visited = ref []})
                         val _ = newVar (arg, Value.fromType argType)
+                        val _ = loopExp body
                      in
                         Value.lambda (lambda, Context.new [],
-                                      Type.arrow (argType, Value.ty (loopExp body)))
+                                      Type.arrow (argType, ty))
                      end
                   val _ =
-                     Control.trace (Control.Pass, "flow analysis")
                      loopExp body
                in ()
                end)
+            val _ = print "O SHIT WADDUP!!!!"
             val overflow = valOf overflow
             val _ =
              Control.trace (Control.Pass, "free variables")
@@ -788,9 +786,7 @@ fun closureConvert
                       in
                         case valueOpt of
                           SOME v => v
-                        | NONE => Error.bug error
-                        | _ =>
-                                  let
+                        | NONE => let
                                     val _ = ContextValueMap.printMap(contextValueMap)
                                   in
                                     Error.bug error
@@ -906,6 +902,7 @@ fun closureConvert
                   and loopLambda (c: Context.t, lambda: Lambda.t, c': Context.t): Value.t =
                      let
                         val LambdaInfo.T {visited, ...} = lambdaInfo lambda
+                        val {arg, argType, body, ...} = Lambda.dest lambda
                      in 
                         if not(List.contains(!visited, c', Context.equals))
                           then 
@@ -913,21 +910,24 @@ fun closureConvert
                                 val _ = List.push (allLambdas, lambda)
                                 val _ = List.push (visited, c')
                                 val _ = mapFrees(c, lambda, c')
-                                val {arg, argType, body, ...} = Lambda.dest lambda
                                 val _ = setVar(c', arg, Value.fromType argType)
-                                val res = loopExp (c', body)
+                                val res = expValue body
                                 val bVar = SvarExp.var (Sexp.result body)
                                 val _ = setVar(c', bVar, res)
+                                val res2 = loopExp (c', body)
+                                val _ = setVar(c', bVar, res2)
                               in 
-                                res
+                                res2
                             end
                         else
                           lookUp (c', 10) (Sexp.result body)
                      end
+                  val _ = print "WE MADE IT BOIS!!!!"
                   val _ =
                      Control.trace (Control.Pass, "flow analysis")
                      loopExp ((Context.new []), body)
-               in ()
+               in 
+                  ContextValueMap.unifyVarInfo(contextValueMap, varInfo)
                end
            in ()
            end
