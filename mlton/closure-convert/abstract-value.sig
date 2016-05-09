@@ -24,6 +24,7 @@ signature ABSTRACT_VALUE =
             val new: Sxml.Var.t list -> t
             val hash: t -> Word.t
             val dest: t -> Sxml.Var.t list
+            val toString: t -> string
             val equals: t * t -> bool
          end
 

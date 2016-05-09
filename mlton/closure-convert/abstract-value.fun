@@ -31,6 +31,7 @@ structure Context =
 
         fun hash (Context {context}) = hashX context
 
+        fun toString (Context {context}) = List.toString Var.toString context
 
         fun dest (Context {context}) = context
       

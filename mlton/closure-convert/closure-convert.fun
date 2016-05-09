@@ -218,6 +218,15 @@ structure ContextInfo =
         fun hash (ContextInfo {hash, ...}) = hash
 
         fun dest (ContextInfo {context, var, ...}) = (context, var)
+        
+        fun toString (ContextInfo {context, var, ...}) =
+            let
+                val cString = (Context.toString context)
+                val varString = Var.toString var
+                val conInfoString = concat[varString, " @ ", cString]
+            in
+                conInfoString
+            end 
 
         fun equals (ContextInfo r, ContextInfo r') =
            #hash r = #hash r'
@@ -225,6 +234,8 @@ structure ContextInfo =
 
 structure ContextValueMap =
   struct
+
+
 
     type t = (ContextInfo.t * Value.t option ref) HashSet.t
  
@@ -254,13 +265,12 @@ structure ContextValueMap =
       let
         fun printCIV (ci: ContextInfo.t, v: Value.t option ref) = 
           let
-            val (c, var) = ContextInfo.dest ci
-            val cList = (Context.dest c)
-            val cString = if(List.isEmpty cList)
-                            then "()"
-                          else Var.toString (List.first(cList))
-            val varString = Var.toString var
-            val outString = concat["@ Context[", varString, ", ", cString, "]"]
+            val ciString = ContextInfo.toString ci
+            val v2 = case (!v) of
+                          SOME x => x
+                        | NONE => Error.bug "No NONE values should exist in the hashmap."
+            val vString = Layout.toString (Value.layout v2)
+            val outString = concat[ciString, " with value: ", vString, "\n"]
           in
             print outString
           end
@@ -278,11 +288,13 @@ structure ContextValueMap =
                           SOME x => x
                         | NONE => Error.bug "No NONE values should exist in the hashmap."
           in
-             Value.unify (v2, value)
+            Value.coerce {from = v2,
+                          to = value}
           end
       in
         HashSet.foreach(set, unifyInfo)
       end
+
   end
 
 val traceLoopBind =
@@ -702,7 +714,8 @@ fun closureConvert
                                  fun handlePat (Pat.T {con, arg, ...}) =
                                     case (arg,      conArg con) of
                                        (NONE,        NONE)       => ()
-                                     | (SOME (x, _), SOME v)     => newVar (x, v)
+                                     | (SOME (x, t), _)     => 
+                                                    newVar (x, Value.fromType t)
                                      | _ => Error.bug "ClosureConvert.loopBind: Case"
                                  val _ = Cases.foreach' (cases, loopExp, handlePat)
                                  val _ = Option.app (default, loopExp o #1)
@@ -719,22 +732,16 @@ fun closureConvert
                                  loopExp handler
                               end
                          | Lambda l => set (loopLambda (l, var, ty))
-                         | PrimApp {prim, args, ...} =>
-                              set (Value.primApply {prim = prim,
-                                                    args = varExps args,
-                                                    resultTy = ty})
+                         | PrimApp {prim, args, ...} => new' ()
                          | Profile _ => new' ()
                          | Raise _ => new' ()
-                         | Select {tuple, offset} =>
-                              set (Value.select (varExp tuple, offset))
-                         | Tuple xs =>
-                              if Value.typeIsFirstOrder ty
-                                 then new' ()
-                            else set (Value.tuple (Vector.map (xs, varExp)))
-                         | Var x => set (varExp x)
+                         | Select {tuple, offset} => new' ()
+                         | Tuple xs => new'()
+                         | Var x => new' ()
                      end) arg
                   and loopLambda (lambda: Lambda.t, x: Var.t, ty: Type.t): Value.t =
                      let
+                        val _ = List.push (allLambdas, lambda)
                         val {arg, argType, body, ...} = Lambda.dest lambda
                         val _ =
                            setLambdaInfo
@@ -748,14 +755,12 @@ fun closureConvert
                         val _ = newVar (arg, Value.fromType argType)
                         val _ = loopExp body
                      in
-                        Value.lambda (lambda, Context.new [],
-                                      Type.arrow (argType, ty))
+                        Value.fromType ty
                      end
                   val _ =
                      loopExp body
                in ()
                end)
-            val _ = print "O SHIT WADDUP!!!!"
             val overflow = valOf overflow
             val _ =
              Control.trace (Control.Pass, "free variables")
@@ -907,7 +912,6 @@ fun closureConvert
                         if not(List.contains(!visited, c', Context.equals))
                           then 
                             let
-                                val _ = List.push (allLambdas, lambda)
                                 val _ = List.push (visited, c')
                                 val _ = mapFrees(c, lambda, c')
                                 val _ = setVar(c', arg, Value.fromType argType)
@@ -922,12 +926,12 @@ fun closureConvert
                         else
                           lookUp (c', 10) (Sexp.result body)
                      end
-                  val _ = print "WE MADE IT BOIS!!!!"
                   val _ =
                      Control.trace (Control.Pass, "flow analysis")
                      loopExp ((Context.new []), body)
+                  val _ = ContextValueMap.unifyVarInfo(contextValueMap, varInfo)
                in 
-                  ContextValueMap.unifyVarInfo(contextValueMap, varInfo)
+                  ContextValueMap.printMap contextValueMap
                end
            in ()
            end
@@ -941,6 +945,16 @@ fun closureConvert
                                                   str " ",
                                                   Value.layout (value x)]
                                           end)))
+      fun printVarInfoForBody (x: Var.t, tyVar: Tyvar.t vector, ty: Stype.t): unit =
+        let
+          val varString = Var.toString x
+          val v = value x
+          val vString = Layout.toString (Value.layout v)
+          val outString = concat["Var: ", varString, " with value: ", vString, "\n"]
+        in
+          print outString
+        end
+      val _ = Sexp.foreachBoundVar (body, printVarInfoForBody)
       val overflow = valOf overflow
       val _ =
         (case !Control.closureConvertCFA of
