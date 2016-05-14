@@ -941,25 +941,33 @@ fun closureConvert
          (fn display =>
           Sexp.foreachBoundVar
           (body, fn (x, _, _) => display (let open Layout
-                                          in seq [Var.layout x,
-                                                  str " ",
-                                                  Value.layout (value x)]
+                                            val v = value x
+                                          in 
+                                            case Value.dest v of
+                                              Value.Lambdas l => seq [str (Int.toString (List.length (Value.Lambdas.toList l))),
+                                                                      str " ", 
+                                                                      Var.layout x,
+                                                                      str " with value: ", 
+                                                                      Value.layout v]
+                                            | _ => seq[str ""]
                                           end)))
-      fun printVarInfoForBody (x: Var.t, tyVar: Tyvar.t vector, ty: Stype.t): unit =
+(*      fun printVarInfoForBody (x: Var.t, tyVar: Tyvar.t vector, ty: Stype.t): unit =
         let
           val varString = Var.toString x
+          val tyString = Layout.toString (Stype.layout ty)
           val v = value x
           val vString = Layout.toString (Value.layout v)
-          val outString = concat["Var: ", varString, " with value: ", vString, "\n"]
+          val outString = concat["Var and Type: ", varString," ", tyString, " with value: ", vString, "\n"]
         in
-          print outString
+          case Value.dest v of
+            Value.Lambdas l => print outString
+          | _ => ()
         end
-      val _ = Sexp.foreachBoundVar (body, printVarInfoForBody)
+      val _ = Sexp.foreachBoundVar (body, printVarInfoForBody) *)
       val overflow = valOf overflow
       val _ =
         (case !Control.closureConvertCFA of
-          Control.CFA.OneMCFA => ()
-        | _ =>  
+          Control.CFA.ZeroCFA => 
            Control.trace (Control.Pass, "free variables")
            LambdaFree.lambdaFree
            {program = program,
@@ -969,7 +977,8 @@ fun closureConvert
                               end,
             lambdaInfo = fn l => let val LambdaInfo.T {frees, recs, ...} = lambdaInfo l
                                  in {frees = frees, recs = recs}
-                                 end})
+                                 end}
+         | _ => Error.bug "ClosureConvert only supports 0-CFA for full compilation at this time.")
       val _ =
          if !Control.closureConvertGlobalize
             then Control.trace (Control.Pass, "globalize")
